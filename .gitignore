@@ -1,0 +1,15 @@
+# 從 Pi 拷回來的核心 headers（體積大，不進版控）
+linux-headers-*/
+
+# 編譯產物
+*.ko
+*.o
+*.mod
+*.mod.c
+*.cmd
+.*.cmd
+modules.order
+Module.symvers
+.tmp_versions/
+*.dtbo
+02-chardrv1/AP1
