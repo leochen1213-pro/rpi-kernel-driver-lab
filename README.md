@@ -11,13 +11,6 @@
 | 主機 | macOS Apple Silicon + Docker |
 | 工具鏈 | 容器內 `aarch64-linux-gnu-gcc`（`debian:trixie`） |
 
-## 練習清單
-
-| 資料夾 | 內容 | 重點 |
-|---|---|---|
-| `01-hello` | Hello World kernel module | 交叉編譯流程、`insmod` / `rmmod` / `dmesg` |
-| `02-chardrv1` | 字元裝置 + userspace 測試程式 `AP1` | `cdev`、`file_operations`、`class_create` + `device_create` 自動建 `/dev` 節點、`simple_read_from_buffer`、mutex |
-| `03-lm75` | LM75 I2C 溫度感測器 driver | device tree overlay、`i2c_driver` probe/remove、sysfs |
 
 ## 使用方式
 
@@ -25,6 +18,14 @@
 
 ```bash
 docker build -t pi-kernel-cross docker/
+```
+
+```bash
+docker run --rm -it \
+  -v $(pwd):/work \
+  -v $(pwd)/linux-headers-6.18.50+rpt-rpi-v8:/usr/src/linux-headers-6.18.50+rpt-rpi-v8 \
+  -v $(pwd)/linux-headers-6.18.50+rpt-common-rpi:/usr/src/linux-headers-6.18.50+rpt-common-rpi \
+  pi-kernel-cross bash
 ```
 
 ### 2. 準備 headers（核心版本每次變動都要重做）
@@ -76,13 +77,3 @@ ls -l /dev/chardrv1
 dmesg | tail
 sudo rmmod charDrv1
 ```
-
-## 踩坑筆記
-
-- **headers 要跟 Pi 實際核心完全一致**：版本對不上，`insmod` 會報 `Invalid module format`。`rpi-v8` 與 `common-rpi` 兩個目錄都要拷，而且要掛載回原本的 `/usr/src/...` 路徑，因為前者的 Makefile 用絕對路徑引用後者。
-- **新版 Raspberry Pi OS 找不到 `raspberrypi-kernel-headers`**：改用 `linux-headers-$(uname -r)`。
-- **`class_create()` 在核心 6.4 之後只吃一個參數**（舊範例多一個 `THIS_MODULE`，會編譯失敗）。
-- **只用 `cdev_add` 不會自動建 `/dev` 節點**：要手動 `mknod`，或用 `class_create` + `device_create` 讓 udev 處理。`rmmod` 也不會刪掉手動 `mknod` 的節點。
-- **`sudo echo x > /dev/foo` 會失敗**：重新導向由當前 shell 執行，不是 `sudo`。改用 `echo x | sudo tee /dev/foo`。
-- **`sudo -i` 會切到 `/root`**：相對路徑的 `.ko` 會找不到，用 `sudo -s` 或直接在指令前加 `sudo`。
-- **`dmesg -C`**：測試前先清空 log，才能確定看到的是這一次操作的紀錄。
