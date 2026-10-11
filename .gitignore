@@ -13,3 +13,4 @@ Module.symvers
 .tmp_versions/
 *.dtbo
 02-chardrv1/AP1
+.DS_Store
