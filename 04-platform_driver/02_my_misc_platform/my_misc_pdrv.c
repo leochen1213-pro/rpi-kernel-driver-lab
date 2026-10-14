@@ -1,21 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Lesson 07-06: 04's misc device, bound through module_platform_driver()
+ * Lesson 07-06 (no client): misc device bound through module_platform_driver()
  *
- * 05 still needed its own module_init()/module_exit(), because two things
- * were SHARED by all devices and had to exist before the first probe():
- *   - the dev_t range   (alloc_chrdev_region)
- *   - the class         (class_create)
- *
- * With misc, both belong to the misc core (major 10, /sys/class/misc), so
- * nothing is shared at module level any more. Every device is set up and
- * torn down entirely in probe()/remove(), and module_platform_driver()
- * writes module_init/exit for us.
+ * Same as my_misc_pdrv.c, but without struct my_client: every open of
+ * /dev/my_miscN points straight at devs[N], like 03.
  *
  *   my_misc_pdev.ko registers "my_misc_pdev.0"  --probe-->  /dev/my_misc0
  *                             "my_misc_pdev.1"  --probe-->  /dev/my_misc1
  *
- * open/read/write/release and struct my_client are unchanged from 04.
+ *   file->private_data -> my_dev   (one level of state)
+ *
+ * With misc, the dev_t range and the class belong to the misc core, so
+ * nothing is shared at module level. Every device is set up and torn down
+ * in probe()/remove(), and module_platform_driver() writes
+ * module_init/exit for us.
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
@@ -23,14 +21,13 @@
 #include <linux/fs.h>
 #include <linux/miscdevice.h>
 #include <linux/mutex.h>
-#include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/platform_device.h>
 #include <linux/mod_devicetable.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Leo");
-MODULE_DESCRIPTION("04 misc device bound through module_platform_driver()");
+MODULE_DESCRIPTION("misc device bound through module_platform_driver(), no client");
 
 #define PDEV_NAME	"my_misc_pdev"	/* must match my_misc_pdev.c */
 #define NR_DEVS		2
@@ -40,18 +37,9 @@ MODULE_DESCRIPTION("04 misc device bound through module_platform_driver()");
 struct my_dev {
 	struct miscdevice misc;		/* embedded: container_of() starts here */
 	char name[16];			/* "my_misc0", referenced by misc.name */
-	struct mutex lock;		/* protects buf, len and nr_clients */
+	struct mutex lock;		/* protects buf and len */
 	char buf[DEV_BUFFER_SIZE];
-	size_t len;
-	int nr_clients;			/* currently open */
-};
-
-/* Per-open state: one for each open() */
-struct my_client {
-	struct my_dev *dev;		/* which device this client uses */
-	int id;				/* client number, for the log */
-	size_t bytes_read;
-	size_t bytes_written;
+	size_t len;			/* valid bytes in buf */
 };
 
 /*
@@ -67,83 +55,60 @@ static struct my_dev devs[NR_DEVS] = {
 	[1] = { .lock = __MUTEX_INITIALIZER(devs[1].lock) },
 };
 
-static atomic_t next_client_id = ATOMIC_INIT(0);
-
-/* ---------------- file_operations: unchanged from 04 ---------------- */
+/* ---------------- file_operations: same as 03 ---------------- */
 
 static int my_open(struct inode *inode, struct file *file)
 {
 	/* Set by the misc core to &devs[i].misc before calling us */
 	struct my_dev *d = container_of(file->private_data,
 					struct my_dev, misc);
-	struct my_client *c;
 
-	c = kzalloc(sizeof(*c), GFP_KERNEL);
-	if (!c)
-		return -ENOMEM;
-	c->dev = d;
-	c->id = atomic_inc_return(&next_client_id);
+	/* Replace it with the whole struct for read/write/release */
+	file->private_data = d;
+	pr_info("%s: open\n", d->name);
 
-	if (mutex_lock_interruptible(&d->lock)) {
-		kfree(c);
-		return -ERESTARTSYS;
-	}
-	if ((file->f_mode & FMODE_WRITE) && (file->f_flags & O_TRUNC))
+	/* "echo text > /dev/my_miscN" opens with O_TRUNC: start empty */
+	if ((file->f_mode & FMODE_WRITE) && (file->f_flags & O_TRUNC)) {
+		if (mutex_lock_interruptible(&d->lock))
+			return -ERESTARTSYS;
 		d->len = 0;
-	d->nr_clients++;
-	mutex_unlock(&d->lock);
-
-	/* From now on read/write/release see the client, not the device */
-	file->private_data = c;
-	pr_info("%s: client %d opened (%d open)\n",
-		d->name, c->id, d->nr_clients);
+		mutex_unlock(&d->lock);
+	}
 	return 0;
 }
 
 static int my_release(struct inode *inode, struct file *file)
 {
-	struct my_client *c = file->private_data;
-	struct my_dev *d = c->dev;
+	struct my_dev *d = file->private_data;
 
-	mutex_lock(&d->lock);
-	d->nr_clients--;
-	mutex_unlock(&d->lock);
-
-	pr_info("%s: client %d closed, read %zu, wrote %zu (%d still open)\n",
-		d->name, c->id, c->bytes_read, c->bytes_written,
-		d->nr_clients);
-	kfree(c);			/* frees the client, never the device */
+	/* Nothing to free: the state belongs to the device, not to this open */
+	pr_info("%s: release\n", d->name);
 	return 0;
 }
 
 static ssize_t my_read(struct file *file, char __user *ubuf,
 		       size_t count, loff_t *ppos)
 {
-	struct my_client *c = file->private_data;
-	struct my_dev *d = c->dev;
+	struct my_dev *d = file->private_data;
 	ssize_t ret;
 
 	if (mutex_lock_interruptible(&d->lock))
 		return -ERESTARTSYS;
 	ret = simple_read_from_buffer(ubuf, count, ppos, d->buf, d->len);
 	mutex_unlock(&d->lock);
-
-	if (ret > 0)
-		c->bytes_read += ret;	/* only this client touches c */
 	return ret;
 }
 
 static ssize_t my_write(struct file *file, const char __user *ubuf,
 			size_t count, loff_t *ppos)
 {
-	struct my_client *c = file->private_data;
-	struct my_dev *d = c->dev;
+	struct my_dev *d = file->private_data;
 	ssize_t ret;
 
 	if (mutex_lock_interruptible(&d->lock))
 		return -ERESTARTSYS;
 
-	if (file->f_flags & O_APPEND)
+	if (file->f_flags & O_APPEND)		/* "echo text >> ..." */
 		*ppos = d->len;
 
 	if (*ppos >= DEV_BUFFER_SIZE) {
@@ -155,9 +120,6 @@ static ssize_t my_write(struct file *file, const char __user *ubuf,
 		d->len = *ppos;
 out:
 	mutex_unlock(&d->lock);
-
-	if (ret > 0)
-		c->bytes_written += ret;
 	return ret;
 }
 
@@ -170,7 +132,7 @@ static const struct file_operations fops = {
 	.llseek  = default_llseek,
 };
 
-/* ---------------- platform driver ---------------- */
+/* ---------------- platform driver: unchanged ---------------- */
 
 /* probe() = the body of 04's my_init() loop, for ONE device */
 static int my_probe(struct platform_device *pdev)
@@ -198,7 +160,7 @@ static int my_probe(struct platform_device *pdev)
 	d->misc.name   = d->name;		/* becomes /dev/my_miscN */
 	d->misc.fops   = &fops;
 	d->misc.mode   = 0666;			/* lab use only */
-	d->misc.parent = &pdev->dev;		/* NEW: hang under the pdev in sysfs */
+	d->misc.parent = &pdev->dev;		/* hang under the pdev in sysfs */
 
 	/* After this succeeds the device may be opened at once */
 	status = misc_register(&d->misc);
@@ -235,13 +197,5 @@ static struct platform_driver my_pdrv = {
 	},
 };
 
-/*
- * Replaces module_init()/module_exit(). It expands to:
- *   static int __init my_pdrv_init(void)
- *   { return platform_driver_register(&my_pdrv); }
- *   static void __exit my_pdrv_exit(void)
- *   { platform_driver_unregister(&my_pdrv); }
- *   module_init(my_pdrv_init);
- *   module_exit(my_pdrv_exit);
- */
+/* Expands to module_init/module_exit calling platform_driver_(un)register */
 module_platform_driver(my_pdrv);
