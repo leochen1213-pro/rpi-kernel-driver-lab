@@ -7,13 +7,13 @@ KDIR          ?= /usr/src/linux-headers-6.18.50+rpt-rpi-v8
 
 ifneq ($(KERNELRELEASE),)
 # ---- 由 kbuild 讀取：只需要告訴它要編哪個模組 ----
-obj-m := my_cdev.o my_misc.o
+obj-m := my_misc.o
 
 else
 # ---- 由命令列執行 ----
 
-# userspace 程式（目前還沒有就保持註解；之後加了 test_mycdev.c 再打開）
-APP := test_private
+# userspace 測試程式（沿用 03 的 test_devs.c）
+APP := test_devs
 
 # userspace 編譯器沿用同一套交叉工具鏈
 # 用 USER_CC 而不是 CC，避免蓋掉 kbuild 自己的 CC
