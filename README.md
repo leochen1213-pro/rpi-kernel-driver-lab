@@ -20,14 +20,6 @@
 docker build -t pi-kernel-cross docker/
 ```
 
-```bash
-docker run --rm -it \
-  -v $(pwd):/work \
-  -v $(pwd)/linux-headers-6.18.50+rpt-rpi-v8:/usr/src/linux-headers-6.18.50+rpt-rpi-v8 \
-  -v $(pwd)/linux-headers-6.18.50+rpt-common-rpi:/usr/src/linux-headers-6.18.50+rpt-common-rpi \
-  pi-kernel-cross bash
-```
-
 ### 2. 準備 headers（核心版本每次變動都要重做）
 
 在 Pi 上安裝（套件名稱依系統版本而定，可用 `apt-cache search linux-headers` 確認）：
@@ -45,35 +37,12 @@ scp -r <user>@<pi-ip>:/usr/src/linux-headers-<版本>+rpt-rpi-v8 ./
 scp -r <user>@<pi-ip>:/usr/src/linux-headers-<版本>+rpt-common-rpi ./
 ```
 
-這兩個目錄已列入 `.gitignore`，不會被提交。
-
 ### 3. 進容器編譯
 
 ```bash
-./scripts/pi-shell.sh          # 預設 KBASE=6.18.50+rpt
-# 核心版本不同時：
-KBASE=6.18.60+rpt ./scripts/pi-shell.sh
-```
-
-容器內：
-
-```bash
-cd 02-chardrv1
-make
-```
-
-### 4. 傳到 Pi 測試
-
-```bash
-scp charDrv1.ko AP1 <user>@<pi-ip>:~/
-```
-
-Pi 上：
-
-```bash
-sudo insmod charDrv1.ko
-ls -l /dev/chardrv1
-./AP1
-dmesg | tail
-sudo rmmod charDrv1
+docker run --rm -it \
+  -v $(pwd):/work \
+  -v $(pwd)/linux-headers-6.18.50+rpt-rpi-v8:/usr/src/linux-headers-6.18.50+rpt-rpi-v8 \
+  -v $(pwd)/linux-headers-6.18.50+rpt-common-rpi:/usr/src/linux-headers-6.18.50+rpt-common-rpi \
+  pi-kernel-cross bash
 ```
